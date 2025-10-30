@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dairy Management – Next.js App
+
+A Next.js (App Router) frontend for the Dairy Management system. Uses Firebase (Auth + Firestore), shadcn/ui, Tailwind CSS v3, and date-fns.
+
+## Features
+- Admin-only app with Firebase Authentication
+- Clients CRUD and daily Deliveries entry (0–5L in 0.25 steps)
+- Price history with mid-month changes
+- Monthly/Custom calculations with PDF export
+- Delivery History with month filter and search
+- Offline-ready Firestore (IndexedDB persistence)
+- Light, cool theme using shadcn/ui and Tailwind v3
+
+## Tech Stack
+- Next.js 14 App Router (TypeScript)
+- Firebase (Auth, Firestore modular SDK)
+- shadcn/ui + Tailwind CSS v3
+- date-fns, lucide-react
+- jspdf + jspdf-autotable (PDF export)
 
 ## Getting Started
 
-First, run the development server:
+1) Install dependencies (from repository root or this folder):
+
+```bash
+npm install
+```
+
+2) Configure Firebase
+
+Create a `.env.local` in this folder if desired, or update `lib/firebase.ts` with your config. Current config is already set for the provided project.
+
+3) Run the dev server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app runs at `http://localhost:3000` if started via Next.js, or `http://localhost:5173` for the Vite app in the root. This Next.js app lives in `nextjs-app/` and uses its own dev server.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
+- `npm run dev` – Start Next.js dev server
+- `npm run build` – Build for production
+- `npm run start` – Start production server
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Project Structure (Next.js)
+```
+nextjs-app/
+├─ app/
+│  ├─ page.tsx                # Dashboard
+│  ├─ clients/page.tsx        # Clients management
+│  ├─ deliveries/page.tsx     # Daily deliveries
+│  ├─ prices/page.tsx         # Price history & set new price
+│  ├─ calculations/page.tsx   # Monthly statements & PDF
+│  ├─ history/page.tsx        # All deliveries history
+│  ├─ login/page.tsx          # Login
+│  ├─ signup/page.tsx         # Signup
+│  ├─ layout.tsx              # Root layout
+│  └─ globals.css             # Global styles
+├─ components/
+│  ├─ Layout.tsx              # Header + nav
+│  ├─ AuthProvider.tsx        # Client-side route guard
+│  ├─ ErrorBoundary.tsx
+│  └─ ui/*                    # shadcn/ui components
+├─ hooks/
+│  ├─ useAuth.ts
+│  ├─ useFirestore.ts         # Caching + realtime wrapper
+│  └─ use-toast.ts
+├─ lib/
+│  ├─ firebase.ts             # Firebase init
+│  └─ utils.ts                # cn(), toDate()
+├─ types/
+│  └─ index.ts                # Client, Price, Delivery types
+├─ tailwind.config.ts
+├─ postcss.config.js
+├─ tsconfig.json
+└─ README.md
+```
 
-## Learn More
+## Tailwind & shadcn
+- Tailwind v3 configured in `tailwind.config.ts` and `postcss.config.js`
+- Global theme tokens in `app/globals.css`
+- All shadcn/ui components live in `components/ui/*`
 
-To learn more about Next.js, take a look at the following resources:
+## Notes & Troubleshooting
+- Use client-side auth (see `components/AuthProvider.tsx`).
+- Date handling: always convert Firestore Timestamps using `toDate()`.
+- To avoid Firestore composite index requirements, heavy sorts are done client-side where acceptable.
+- If you update clients or prices and don’t see changes immediately, clear session cache keys (e.g., `clients_list`, `milk_prices`) or refresh.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Deployment
+- Any Next.js-compatible host (Vercel recommended). Ensure Firebase web credentials are configured in env or `lib/firebase.ts`.
