@@ -272,13 +272,13 @@ const Deliveries = () => {
                 </TableRow>
               ) : (
                 clients.map((client) => (
-                  <TableRow key={client.id} className="hover:bg-slate-50/50">
+                  <TableRow key={client.id || client.name} className="hover:bg-slate-50/50">
                     <TableCell className="font-medium">{client.name}</TableCell>
                     <TableCell>
                       <Select
-                        value={String(deliveries[client.id] || 0)}
+                        value={String(deliveries[client.id!] || 0)}
                         onValueChange={(value) => 
-                          handleQuantityChange(client.id, parseFloat(value))
+                          handleQuantityChange(client.id!, parseFloat(value))
                         }
                         onOpenChange={(open) => {
                           if (open) {
@@ -309,7 +309,7 @@ const Deliveries = () => {
                       <TableCell className="text-slate-600">
                         <div className="flex items-center">
                           <IndianRupee className="h-4 w-4 mr-1 text-slate-400" />
-                          {((deliveries[client.id] || 0) * currentPrice.amount).toFixed(2)}
+                          {((deliveries[client.id!] || 0) * currentPrice.amount).toFixed(2)}
                         </div>
                       </TableCell>
                     )}

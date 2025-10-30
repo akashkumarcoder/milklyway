@@ -65,8 +65,8 @@ const Prices = () => {
   // Sort prices by startDate on the client side
   const prices = rawPrices.sort((a, b) => {
     try {
-      const dateA = a.startDate?.toDate ? a.startDate.toDate() : toDate(a.startDate);
-      const dateB = b.startDate?.toDate ? b.startDate.toDate() : toDate(b.startDate);
+      const dateA = toDate(a.startDate as any);
+      const dateB = toDate(b.startDate as any);
       return dateB.getTime() - dateA.getTime();
     } catch (error) {
       console.warn('Error sorting prices:', error);
@@ -359,7 +359,7 @@ const Prices = () => {
               </div>
               <div className="ml-3">
                 <p className="text-sm text-red-700">
-                  {error}
+                  {error?.message || String(error)}
                 </p>
               </div>
             </div>

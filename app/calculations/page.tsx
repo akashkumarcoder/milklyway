@@ -11,7 +11,7 @@ import {
   Timestamp,
   orderBy,
 } from 'firebase/firestore';
-import { Client, Delivery, MilkPrice } from '@/types';
+import { Client, Delivery, Price } from '@/types';
 import { toDate } from '@/lib/utils';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
 import { jsPDF } from 'jspdf';
@@ -33,7 +33,7 @@ interface ClientSummary {
 
 const Calculations = () => {
   const [clients, setClients] = useState<Client[]>([]);
-  const [prices, setPrices] = useState<MilkPrice[]>([]);
+  const [prices, setPrices] = useState<Price[]>([]);
   const [summaries, setSummaries] = useState<ClientSummary[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
@@ -67,7 +67,7 @@ const Calculations = () => {
         ...doc.data(),
         startDate: toDate(doc.data().startDate),
         endDate: doc.data().endDate ? toDate(doc.data().endDate) : null,
-      })) as MilkPrice[];
+      })) as Price[];
       // Sort by startDate desc client-side
       pricesData.sort((a, b) => (b.startDate as Date).getTime() - (a.startDate as Date).getTime());
       setPrices(pricesData);
@@ -87,7 +87,7 @@ const Calculations = () => {
       
       // Process deliveries and calculate summaries
       const clientSummaries: ClientSummary[] = clientsData.map((client) => ({
-        id: client.id,
+        id: client.id!,
         name: client.name,
         totalQuantity: 0,
         totalAmount: 0,
@@ -96,22 +96,30 @@ const Calculations = () => {
 
       deliveriesSnapshot.docs.forEach((doc) => {
         const delivery = doc.data() as Delivery;
-        const clientSummary = clientSummaries.find(
-          (s) => s.id === delivery.clientId
-        );
-        if (clientSummary) {
-          const price = prices.find((p) => p.id === delivery.priceId);
-          if (price) {
-            const deliveryWithPrice = {
-              ...delivery,
-              date: delivery.date.toDate(),
-              price: price.amount,
-            };
-            clientSummary.deliveries.push(deliveryWithPrice);
-            clientSummary.totalQuantity += delivery.quantity;
-            clientSummary.totalAmount += delivery.quantity * price.amount;
-          }
-        }
+        const clientSummary = clientSummaries.find((s) => s.id === delivery.clientId);
+        if (!clientSummary) return;
+
+        const deliveryDate = (delivery as any).date?.toDate
+          ? (delivery as any).date.toDate()
+          : toDate((delivery as any).date);
+
+        const applicablePrice = prices.find((p) => {
+          const start = toDate(p.startDate as any);
+          const end = p.endDate ? toDate(p.endDate as any) : null;
+          return deliveryDate >= start && (!end || deliveryDate <= end);
+        });
+
+        const priceAmount = applicablePrice?.amount ?? 0;
+
+        const deliveryWithPrice = {
+          ...(delivery as any),
+          date: deliveryDate,
+          price: priceAmount,
+        } as DeliveryWithPrice;
+
+        clientSummary.deliveries.push(deliveryWithPrice);
+        clientSummary.totalQuantity += delivery.quantity;
+        clientSummary.totalAmount += delivery.quantity * priceAmount;
       });
 
       setSummaries(clientSummaries);
@@ -145,14 +153,14 @@ const Calculations = () => {
           `₹${summary.totalAmount.toFixed(2)}`,
         ]);
 
-      doc.autoTable({
+      (doc as any).autoTable({
         startY: 30,
         head: [['Client Name', 'Total Quantity (L)', 'Total Amount']],
         body: summaryData,
       });
 
       // Generate detailed tables for each client
-      let yPos = doc.lastAutoTable?.finalY || 30;
+      let yPos = (doc as any).lastAutoTable?.finalY || 30;
 
       for (const summary of summaries) {
         if (summary.totalQuantity > 0) {
@@ -177,13 +185,13 @@ const Calculations = () => {
             `₹${(delivery.quantity * delivery.price).toFixed(2)}`,
           ]);
 
-          doc.autoTable({
+          (doc as any).autoTable({
             startY: yPos + 5,
             head: [['Date', 'Quantity (L)', 'Rate', 'Amount']],
             body: detailData,
           });
 
-          yPos = doc.lastAutoTable?.finalY || yPos;
+          yPos = (doc as any).lastAutoTable?.finalY || yPos;
         }
       }
 

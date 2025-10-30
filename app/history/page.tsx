@@ -37,7 +37,7 @@ export default function HistoryPage() {
   const clientMap = useMemo(() => {
     const map: Record<string, Client> = {} as any;
     clients.forEach((c) => {
-      map[c.id] = c;
+      if (c.id) map[c.id] = c;
     });
     return map;
   }, [clients]);
