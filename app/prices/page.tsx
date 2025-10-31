@@ -13,7 +13,14 @@ import {
   doc,
 } from 'firebase/firestore';
 import { useFirestore } from '@/hooks/useFirestore';
-import type { Price } from '@/types';
+import type { Price, MilkType } from '@/types';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { format } from 'date-fns';
 import { Button } from "@/components/ui/button";
 import {
@@ -52,18 +59,26 @@ import { toDate } from "@/lib/utils";
 const Prices = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newPrice, setNewPrice] = useState<number>(0);
+  const [selectedMilkType, setSelectedMilkType] = useState<MilkType>('cow');
+  const [filterMilkType, setFilterMilkType] = useState<MilkType | 'all'>('all');
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
-  // Use our custom hook with caching for prices
+  // Use our custom hook with caching for prices - enable realtime updates
   const { data: rawPrices, loading, error, refetch } = useFirestore<Price>(
     'prices',
     [], // No constraints to avoid index requirements
-    { cacheKey: 'milk_prices', cacheDuration: 5 }
+    { cacheKey: 'milk_prices', cacheDuration: 5, realtime: true }
   );
 
-  // Sort prices by startDate on the client side
-  const prices = rawPrices.sort((a, b) => {
+  // Filter and sort prices by milk type and startDate
+  // Default to 'cow' for backward compatibility if milkType is missing
+  const filteredPrices = rawPrices.filter(price => {
+    const milkType = (price as any).milkType || 'cow';
+    return filterMilkType === 'all' || milkType === filterMilkType;
+  });
+  
+  const prices = filteredPrices.sort((a, b) => {
     try {
       const dateA = toDate(a.startDate as any);
       const dateB = toDate(b.startDate as any);
@@ -74,8 +89,19 @@ const Prices = () => {
     }
   });
 
-  const currentPrice = prices.find(price => !price.endDate);
+  const currentCowPrice = prices.find(price => !price.endDate && ((price as any).milkType || 'cow') === 'cow');
+  const currentBuffaloPrice = prices.find(price => !price.endDate && (price as any).milkType === 'buffalo');
+  
+  // For the selected type in modal
+  const currentPrice = selectedMilkType === 'cow' ? currentCowPrice : currentBuffaloPrice;
   const historicalPrices = prices.filter(price => price.endDate);
+
+  // Debug: log raw prices to see what we're getting
+  useEffect(() => {
+    console.log('Raw prices from Firestore:', rawPrices);
+    console.log('Filtered prices:', filteredPrices);
+    console.log('All prices (sorted):', prices);
+  }, [rawPrices, filteredPrices, prices]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,19 +119,22 @@ const Prices = () => {
       setSaving(true);
       console.log('Starting price update process...');
 
-      // Update the end date of the current active price
-      if (currentPrice) {
-        console.log('Updating current price end date...', currentPrice.id);
-        await updateDoc(doc(db, 'prices', currentPrice.id!), {
+      // Update the end date of the current active price for the selected milk type
+      const currentPriceForType = selectedMilkType === 'cow' ? currentCowPrice : currentBuffaloPrice;
+      if (currentPriceForType) {
+        console.log('Updating current price end date...', currentPriceForType.id);
+        await updateDoc(doc(db, 'prices', currentPriceForType.id!), {
           endDate: Timestamp.now(),
         });
         console.log('Current price end date updated successfully');
       }
 
       // Add new price
-      console.log('Adding new price...', newPrice);
+      console.log('Adding new price...', newPrice, selectedMilkType);
+      
       const newPriceData = {
         amount: newPrice,
+        milkType: selectedMilkType,
         startDate: Timestamp.now(),
         endDate: null,
       };
@@ -121,6 +150,9 @@ const Prices = () => {
 
       setIsModalOpen(false);
       setNewPrice(0);
+      
+      // Clear cache to ensure fresh data
+      sessionStorage.removeItem('milk_prices');
       refetch();
     } catch (error: any) {
       console.error('Error saving price:', error);
@@ -214,6 +246,22 @@ const Prices = () => {
                   {/* Form content */}
                   <div className="px-6 py-6 bg-white">
                     <form onSubmit={handleSubmit} className="space-y-6">
+                      {/* Milk type selection */}
+                      <div className="space-y-3">
+                        <Label htmlFor="milkType" className="text-sm font-semibold text-slate-700">
+                          Milk Type
+                        </Label>
+                        <Select value={selectedMilkType} onValueChange={(value) => setSelectedMilkType(value as MilkType)}>
+                          <SelectTrigger className="h-12">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cow">Cow Milk</SelectItem>
+                            <SelectItem value="buffalo">Buffalo Milk</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
                       {/* Current price info */}
                       {currentPrice && (
                         <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
@@ -325,30 +373,71 @@ const Prices = () => {
           </div>
         </div>
 
-        {/* Current Price Card */}
-        {currentPrice && (
-          <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border border-green-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-green-100 rounded-lg">
-                  <TrendingUp className="h-6 w-6 text-green-600" />
+        {/* Filter */}
+        <div className="flex items-center gap-3">
+          <Label className="text-sm font-medium text-slate-700">Filter by Milk Type:</Label>
+          <Select value={filterMilkType} onValueChange={(value) => setFilterMilkType(value as MilkType | 'all')}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              <SelectItem value="cow">Cow Milk</SelectItem>
+              <SelectItem value="buffalo">Buffalo Milk</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Current Price Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {currentCowPrice && (
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border border-green-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <TrendingUp className="h-6 w-6 text-green-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-green-900">Cow Milk Price</h3>
+                    <p className="text-sm text-green-700">
+                      Active since {currentCowPrice.startDate ? format(toDate(currentCowPrice.startDate), 'MMM d, yyyy') : 'Loading...'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-green-900">Current Price</h3>
-                  <p className="text-sm text-green-700">
-                    Active since {currentPrice.startDate ? format(toDate(currentPrice.startDate), 'MMM d, yyyy') : 'Loading...'}
-                  </p>
+                <div className="text-right">
+                  <div className="text-3xl font-bold text-green-900">
+                    ₹{currentCowPrice.amount}
+                  </div>
+                  <div className="text-sm text-green-600">per liter</div>
                 </div>
-              </div>
-              <div className="text-right">
-                <div className="text-3xl font-bold text-green-900">
-                  ₹{currentPrice.amount}
-                </div>
-                <div className="text-sm text-green-600">per liter</div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+          
+          {currentBuffaloPrice && (
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-6 border border-amber-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-100 rounded-lg">
+                    <TrendingUp className="h-6 w-6 text-amber-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-amber-900">Buffalo Milk Price</h3>
+                    <p className="text-sm text-amber-700">
+                      Active since {currentBuffaloPrice.startDate ? format(toDate(currentBuffaloPrice.startDate), 'MMM d, yyyy') : 'Loading...'}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-3xl font-bold text-amber-900">
+                    ₹{currentBuffaloPrice.amount}
+                  </div>
+                  <div className="text-sm text-amber-600">per liter</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Error State */}
         {error && (
@@ -378,6 +467,7 @@ const Prices = () => {
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50/50">
+                <TableHead className="font-semibold">Milk Type</TableHead>
                 <TableHead className="font-semibold">Price (₹)</TableHead>
                 <TableHead className="font-semibold">Start Date</TableHead>
                 <TableHead className="font-semibold">End Date</TableHead>
@@ -388,7 +478,7 @@ const Prices = () => {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8">
+                  <TableCell colSpan={6} className="text-center py-8">
                     <div className="flex justify-center">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
                     </div>
@@ -396,7 +486,7 @@ const Prices = () => {
                 </TableRow>
               ) : prices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8">
+                  <TableCell colSpan={6} className="text-center py-8">
                     <div className="flex flex-col items-center text-slate-500">
                       <DollarSign className="h-8 w-8 mb-2" />
                       <p>No prices found</p>
@@ -417,6 +507,17 @@ const Prices = () => {
                   
                   return (
                     <TableRow key={price.id} className="hover:bg-slate-50/50">
+                      <TableCell>
+                        <Badge 
+                          variant={((price as any).milkType || 'cow') === 'cow' ? "default" : "secondary"}
+                          className={((price as any).milkType || 'cow') === 'cow' 
+                            ? "bg-green-100 text-green-800 hover:bg-green-100" 
+                            : "bg-amber-100 text-amber-800 hover:bg-amber-100"
+                          }
+                        >
+                          {((price as any).milkType || 'cow') === 'cow' ? 'Cow' : 'Buffalo'}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
                           <IndianRupee className="h-4 w-4 text-slate-400" />

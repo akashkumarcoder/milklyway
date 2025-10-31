@@ -94,6 +94,10 @@ const Calculations = () => {
         deliveries: [],
       }));
 
+      // First, collect all deliveries and deduplicate by client+date+milkType
+      // If there are duplicates (from before we fixed replacement logic), keep only the most recent one
+      const deliveriesByKey = new Map<string, DeliveryWithPrice & { docId: string; sortKey: number }>();
+      
       deliveriesSnapshot.docs.forEach((doc) => {
         const delivery = doc.data() as Delivery;
         const clientSummary = clientSummaries.find((s) => s.id === delivery.clientId);
@@ -103,23 +107,65 @@ const Calculations = () => {
           ? (delivery as any).date.toDate()
           : toDate((delivery as any).date);
 
+        const deliveryMilkType = delivery.milkType || 'cow';
+        
+        // Create a unique key: clientId + date (normalized to start of day) + milkType
+        const dateKey = format(deliveryDate, 'yyyy-MM-dd');
+        const uniqueKey = `${delivery.clientId}:${dateKey}:${deliveryMilkType}`;
+        
         const applicablePrice = prices.find((p) => {
           const start = toDate(p.startDate as any);
           const end = p.endDate ? toDate(p.endDate as any) : null;
-          return deliveryDate >= start && (!end || deliveryDate <= end);
+          const priceMilkType = p.milkType || 'cow';
+          return (
+            priceMilkType === deliveryMilkType &&
+            deliveryDate >= start && 
+            (!end || deliveryDate <= end)
+          );
         });
 
-        const priceAmount = applicablePrice?.amount ?? 0;
+        const priceAmount = applicablePrice?.amount ?? delivery.priceAtDelivery ?? 0;
+
+        // Get createdAt timestamp for sorting (prefer createdAt, fallback to date, then doc.id)
+        const createdAt = doc.data().createdAt 
+          ? ((doc.data().createdAt as any)?.toDate ? (doc.data().createdAt as any).toDate() : doc.data().createdAt)
+          : deliveryDate;
 
         const deliveryWithPrice = {
           ...(delivery as any),
           date: deliveryDate,
           price: priceAmount,
-        } as DeliveryWithPrice;
+          docId: doc.id,
+          sortKey: createdAt.getTime ? createdAt.getTime() : new Date(createdAt).getTime(),
+        } as DeliveryWithPrice & { docId: string; sortKey: number };
 
-        clientSummary.deliveries.push(deliveryWithPrice);
+        // If we already have a delivery for this key, keep the most recent one (by sortKey, then doc.id)
+        const existing = deliveriesByKey.get(uniqueKey);
+        if (!existing) {
+          deliveriesByKey.set(uniqueKey, deliveryWithPrice);
+        } else {
+          // Compare by sortKey (timestamp), then by doc.id as tiebreaker
+          const existingSortKey = existing.sortKey;
+          const newSortKey = deliveryWithPrice.sortKey;
+          if (newSortKey > existingSortKey || (newSortKey === existingSortKey && doc.id > existing.docId)) {
+            deliveriesByKey.set(uniqueKey, deliveryWithPrice);
+          }
+        }
+      });
+
+      // Now process the deduplicated deliveries
+      deliveriesByKey.forEach((delivery) => {
+        const clientSummary = clientSummaries.find((s) => s.id === delivery.clientId);
+        if (!clientSummary) return;
+
+        clientSummary.deliveries.push(delivery);
         clientSummary.totalQuantity += delivery.quantity;
-        clientSummary.totalAmount += delivery.quantity * priceAmount;
+        clientSummary.totalAmount += delivery.quantity * delivery.price;
+      });
+
+      // Sort deliveries by date for each client summary
+      clientSummaries.forEach((summary) => {
+        summary.deliveries.sort((a, b) => a.date.getTime() - b.date.getTime());
       });
 
       setSummaries(clientSummaries);

@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useFirestore } from '@/hooks/useFirestore';
-import type { Client, Delivery } from '@/types';
+import type { Client, Delivery, MilkType, Price } from '@/types';
+import { Badge } from "@/components/ui/badge";
 import { toDate } from '@/lib/utils';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -16,13 +17,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
-import { Calendar as CalendarIcon, History, Download, Filter } from 'lucide-react';
+import { Calendar as CalendarIcon, History, Download, Filter, IndianRupee } from 'lucide-react';
 
 export default function HistoryPage() {
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
   const [search, setSearch] = useState('');
 
-  // Fetch all deliveries and clients; filter client-side for simplicity and to avoid composite indexes
+  // Fetch all deliveries, clients, and prices; filter client-side for simplicity and to avoid composite indexes
   const { data: deliveries, loading: loadingDeliveries } = useFirestore<Delivery>(
     'deliveries',
     [],
@@ -32,6 +33,11 @@ export default function HistoryPage() {
     'clients',
     [],
     { cacheKey: 'clients_list', cacheDuration: 2, realtime: true }
+  );
+  const { data: prices, loading: loadingPrices } = useFirestore<Price>(
+    'prices',
+    [],
+    { cacheKey: 'milk_prices', cacheDuration: 5 }
   );
 
   const clientMap = useMemo(() => {
@@ -46,28 +52,112 @@ export default function HistoryPage() {
   const monthEnd = endOfMonth(selectedMonth);
 
   const rows = useMemo(() => {
-    return deliveries
-      .map((d) => ({
-        ...d,
-        dateObj: toDate((d as any).date),
-      }))
-      .filter((d) => d.dateObj >= monthStart && d.dateObj <= monthEnd)
-      .map((d) => ({
-        id: (d as any).id,
-        date: d.dateObj,
-        client: clientMap[d.clientId]?.name || 'Unknown',
-        quantity: d.quantity,
-        // priceId is stored; we don't refetch price here, but amount column can be omitted or computed elsewhere.
-        // Keep amount blank if price unknown for historical rows; this page focuses on listing deliveries.
-      }))
+    // First, deduplicate deliveries by client+date+milkType (same logic as calculations page)
+    // This handles duplicates from before we fixed the replacement logic
+    const deliveriesByKey = new Map<string, {
+      id: string;
+      date: Date;
+      clientId: string;
+      milkType: MilkType;
+      quantity: number;
+      priceAtDelivery?: number;
+      docId: string;
+      sortKey: number;
+    }>();
+
+    deliveries.forEach((d) => {
+      const dateObj = toDate((d as any).date);
+      
+      // Only process deliveries within the selected month
+      if (dateObj < monthStart || dateObj > monthEnd) return;
+
+      const milkType = (d.milkType || 'cow') as MilkType;
+      const dateKey = format(dateObj, 'yyyy-MM-dd');
+      const uniqueKey = `${d.clientId}:${dateKey}:${milkType}`;
+      
+      // Get createdAt timestamp for sorting
+      const createdAt = (d as any).createdAt 
+        ? ((d as any).createdAt?.toDate ? (d as any).createdAt.toDate() : (d as any).createdAt)
+        : dateObj;
+      
+      const sortKey = createdAt.getTime ? createdAt.getTime() : new Date(createdAt).getTime();
+
+      const existing = deliveriesByKey.get(uniqueKey);
+      const docId = (d as any).id || '';
+
+      // If we already have a delivery for this key, keep the most recent one
+      if (!existing) {
+        deliveriesByKey.set(uniqueKey, {
+          id: docId,
+          date: dateObj,
+          clientId: d.clientId,
+          milkType,
+          quantity: d.quantity,
+          priceAtDelivery: d.priceAtDelivery,
+          docId,
+          sortKey,
+        });
+      } else {
+        // Compare by sortKey (timestamp), then by doc.id as tiebreaker
+        if (sortKey > existing.sortKey || (sortKey === existing.sortKey && docId > existing.docId)) {
+          deliveriesByKey.set(uniqueKey, {
+            id: docId,
+            date: dateObj,
+            clientId: d.clientId,
+            milkType,
+            quantity: d.quantity,
+            priceAtDelivery: d.priceAtDelivery,
+            docId,
+            sortKey,
+          });
+        }
+      }
+    });
+
+    // Sort prices by startDate (most recent first)
+    const sortedPrices = [...prices].sort((a, b) => {
+      const dateA = toDate(a.startDate as any);
+      const dateB = toDate(b.startDate as any);
+      return dateB.getTime() - dateA.getTime();
+    });
+
+    // Now process deduplicated deliveries and add price/amount info
+    return Array.from(deliveriesByKey.values())
+      .map((d) => {
+        // Find applicable price for this delivery
+        const applicablePrice = sortedPrices.find((p) => {
+          const priceStart = toDate(p.startDate as any);
+          const priceEnd = p.endDate ? toDate(p.endDate as any) : null;
+          const priceMilkType = p.milkType || 'cow';
+          return (
+            priceMilkType === d.milkType &&
+            d.date >= priceStart &&
+            (!priceEnd || d.date <= priceEnd)
+          );
+        });
+
+        const price = applicablePrice?.amount ?? d.priceAtDelivery ?? 0;
+        const amount = d.quantity * price;
+
+        return {
+          id: d.id,
+          date: d.date,
+          client: clientMap[d.clientId]?.name || 'Unknown',
+          milkType: d.milkType,
+          quantity: d.quantity,
+          price,
+          amount,
+        };
+      })
       .filter((r) =>
         r.client.toLowerCase().includes(search.toLowerCase()) ||
-        format(r.date, 'dd/MM/yyyy').includes(search)
+        format(r.date, 'dd/MM/yyyy').includes(search) ||
+        r.milkType.toLowerCase().includes(search.toLowerCase())
       )
       .sort((a, b) => b.date.getTime() - a.date.getTime());
-  }, [deliveries, clientMap, monthStart, monthEnd, search]);
+  }, [deliveries, clients, prices, clientMap, monthStart, monthEnd, search]);
 
-  const loading = loadingClients || loadingDeliveries;
+  const loading = loadingClients || loadingDeliveries || loadingPrices;
 
   return (
     <Layout>
@@ -112,7 +202,7 @@ export default function HistoryPage() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by client or date (dd/mm/yyyy)"
+              placeholder="Search by client, date, or milk type"
               className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent"
             />
           </div>
@@ -129,13 +219,16 @@ export default function HistoryPage() {
               <TableRow className="bg-slate-50/50">
                 <TableHead className="font-semibold">Date</TableHead>
                 <TableHead className="font-semibold">Client</TableHead>
+                <TableHead className="font-semibold">Milk Type</TableHead>
                 <TableHead className="font-semibold">Quantity (L)</TableHead>
+                <TableHead className="font-semibold">Price (₹/L)</TableHead>
+                <TableHead className="font-semibold">Amount (₹)</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center py-8">
+                  <TableCell colSpan={6} className="text-center py-8">
                     <div className="flex h-12 items-center justify-center gap-2 text-slate-600">
                       <div className="h-6 w-6 animate-spin rounded-full border-4 border-slate-200 border-t-slate-600" />
                       <span>Loading deliveries...</span>
@@ -144,16 +237,45 @@ export default function HistoryPage() {
                 </TableRow>
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center py-10 text-slate-500">
+                  <TableCell colSpan={6} className="text-center py-10 text-slate-500">
                     No deliveries for {format(selectedMonth, 'MMMM yyyy')}.
                   </TableCell>
                 </TableRow>
               ) : (
                 rows.map((r, idx) => (
-                  <TableRow key={idx} className="hover:bg-slate-50/50">
-                    <TableCell className="whitespace-nowrap">{format(r.date, 'dd/MM/yyyy')}</TableCell>
-                    <TableCell className="whitespace-nowrap">{r.client}</TableCell>
-                    <TableCell className="whitespace-nowrap">{r.quantity}</TableCell>
+                  <TableRow key={r.id || idx} className="hover:bg-slate-50/50">
+                    <TableCell className="whitespace-nowrap text-slate-900">
+                      {format(r.date, 'dd/MM/yyyy')}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap font-medium text-slate-900">
+                      {r.client}
+                    </TableCell>
+                    <TableCell>
+                      <Badge 
+                        variant={r.milkType === 'cow' ? "default" : "secondary"}
+                        className={r.milkType === 'cow' 
+                          ? "bg-green-100 text-green-800 hover:bg-green-100" 
+                          : "bg-amber-100 text-amber-800 hover:bg-amber-100"
+                        }
+                      >
+                        {r.milkType === 'cow' ? 'Cow' : 'Buffalo'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-slate-700">
+                      {r.quantity.toFixed(2)} L
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-slate-700">
+                      <div className="flex items-center gap-1">
+                        <IndianRupee className="h-3 w-3 text-slate-400" />
+                        {r.price.toFixed(2)}
+                      </div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap font-medium text-slate-900">
+                      <div className="flex items-center gap-1">
+                        <IndianRupee className="h-3 w-3 text-slate-400" />
+                        {r.amount.toFixed(2)}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))
               )}
